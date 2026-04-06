@@ -22,7 +22,7 @@ services:
 
   # ─── Asterisk: Media server / PBX engine ───────────────────
   asterisk:
-    image: andrius/asterisk:20-current
+    image: mlan/asterisk:stable
     container_name: xyra-asterisk
     restart: unless-stopped
     network_mode: host
