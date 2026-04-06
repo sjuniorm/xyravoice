@@ -66,7 +66,15 @@ export default function Softphone() {
 
   function handleDial() {
     if (!dialInput) return;
-    phone.call(dialInput);
+
+    // If the dialed number matches a known extension in our tenant,
+    // translate it to the globally-unique SIP username so Kamailio
+    // can find the registration. Otherwise pass the number through
+    // as-is (for external/PSTN calls via trunks).
+    const match = extensions.find((e) => e.extension === dialInput);
+    const target = match ? match.sip_username : dialInput;
+
+    phone.call(target);
     setDialInput("");
   }
 
