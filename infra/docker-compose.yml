@@ -7,7 +7,7 @@
 services:
   # ─── Kamailio: SIP proxy + WebSocket gateway ───────────────
   kamailio:
-    image: ghcr.io/kamailio/kamailio:6.0
+    image: ghcr.io/kamailio/kamailio-ci:master
     container_name: xyra-kamailio
     restart: unless-stopped
     network_mode: host  # Required: SIP/RTP need real ports, not NAT'd
