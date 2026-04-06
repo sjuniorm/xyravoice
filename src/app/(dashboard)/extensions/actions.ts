@@ -21,13 +21,17 @@ export async function createSipUser(formData: FormData) {
   } = await supabase.auth.getUser();
   if (!user) return { error: "Not authenticated" };
 
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("tenant_id")
     .eq("id", user.id)
     .single();
 
-  if (!profile) return { error: "Profile not found" };
+  if (profileError || !profile) {
+    return {
+      error: `Profile lookup failed: ${profileError?.message ?? "no profile row"} (user ${user.id})`,
+    };
+  }
 
   const sipUsername = generateSipUsername(profile.tenant_id, extension);
   const sipPassword = generateSipPassword();
