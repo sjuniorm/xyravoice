@@ -1,0 +1,45 @@
+# ============================================================
+# Xyra Voice — SIP Infrastructure
+# Runs on: Hetzner CX22 (Ubuntu 22.04/24.04)
+# Services: Kamailio (SIP proxy) + Asterisk (PBX/media) + Nginx (TLS for WSS)
+# ============================================================
+
+services:
+  # ─── Kamailio: SIP proxy + WebSocket gateway ───────────────
+  kamailio:
+    image: ghcr.io/kamailio/kamailio:6.0
+    container_name: xyra-kamailio
+    restart: unless-stopped
+    network_mode: host  # Required: SIP/RTP need real ports, not NAT'd
+    volumes:
+      - ./kamailio:/etc/kamailio:rw
+      - ./logs/kamailio:/var/log/kamailio:rw
+    environment:
+      - KAMAILIO_CFG=/etc/kamailio/kamailio.cfg
+    command: ["kamailio", "-DD", "-E", "-f", "/etc/kamailio/kamailio.cfg"]
+    depends_on:
+      - asterisk
+
+  # ─── Asterisk: Media server / PBX engine ───────────────────
+  asterisk:
+    image: andrius/asterisk:20-current
+    container_name: xyra-asterisk
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./asterisk/etc:/etc/asterisk:rw
+      - ./asterisk/sounds:/var/lib/asterisk/sounds/custom:rw
+      - ./logs/asterisk:/var/log/asterisk:rw
+
+  # ─── Nginx: TLS termination for WSS (browser softphones) ───
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: xyra-nginx
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./letsencrypt:/etc/letsencrypt:ro
+      - ./logs/nginx:/var/log/nginx:rw
+    depends_on:
+      - kamailio

@@ -1,0 +1,4 @@
+# Generated at deploy time on the VPS — never commit
+letsencrypt/
+logs/
+.env
