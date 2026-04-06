@@ -2,3 +2,7 @@
 letsencrypt/
 logs/
 .env
+
+# Secrets — examples are committed, real files are not
+kamailio/secrets/*
+!kamailio/secrets/*.example
