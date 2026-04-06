@@ -28,9 +28,16 @@ services:
     container_name: xyra-rtpengine
     restart: unless-stopped
     network_mode: host
+    # The drachtio entrypoint runs sed on /etc/rtpengine.conf to substitute
+    # MY_IP, so the file must be writable. We mount the whole dir.
     volumes:
-      - ./rtpengine/rtpengine.conf:/etc/rtpengine.conf:ro
-    command: ["rtpengine"]
+      - ./rtpengine:/etc/rtpengine-host:ro
+    # Override entrypoint: copy our config in, then exec rtpengine directly
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        cp /etc/rtpengine-host/rtpengine.conf /etc/rtpengine.conf
+        exec rtpengine --config-file /etc/rtpengine.conf
 
   # ─── Asterisk: PBX engine for trunk routing ───────────────
   # Handles external calls (PSTN via SIP trunks). Step 4.
