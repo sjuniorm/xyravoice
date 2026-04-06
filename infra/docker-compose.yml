@@ -1,7 +1,8 @@
 # ============================================================
 # Xyra Voice — SIP Infrastructure
-# Runs on: Hetzner CX22 (Ubuntu 22.04/24.04)
-# Services: Kamailio (SIP proxy) + Asterisk (PBX/media) + Nginx (TLS for WSS)
+# Runs on: Hetzner CX23 (Ubuntu 22.04/24.04)
+# Services: Kamailio (SIP proxy) + rtpengine (WebRTC media relay)
+#           + Asterisk (PBX/media for trunks) + Nginx (TLS for WSS)
 # ============================================================
 
 services:
@@ -10,16 +11,36 @@ services:
     image: ghcr.io/kamailio/kamailio-ci:master
     container_name: xyra-kamailio
     restart: unless-stopped
-    network_mode: host  # Required: SIP/RTP need real ports, not NAT'd
+    network_mode: host
     volumes:
       - ./kamailio:/etc/kamailio:rw
       - ./logs/kamailio:/var/log/kamailio:rw
-    # Image entrypoint is already "kamailio -DD -E", we just pass extra args
     command: ["-f", "/etc/kamailio/kamailio.cfg"]
     depends_on:
+      - rtpengine
       - asterisk
 
-  # ─── Asterisk: Media server / PBX engine ───────────────────
+  # ─── rtpengine: WebRTC ↔ RTP media relay ──────────────────
+  # Bridges browser DTLS-SRTP to plain RTP and vice versa.
+  # Required for browser-based softphones to make calls.
+  rtpengine:
+    image: drachtio/rtpengine:latest
+    container_name: xyra-rtpengine
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - "--interface=PUBLIC_IP_PLACEHOLDER"
+      - "--listen-ng=127.0.0.1:22222"
+      - "--port-min=30000"
+      - "--port-max=40000"
+      - "--log-stderr"
+      - "--log-level=6"
+      - "--no-fallback"
+      - "--delete-delay=0"
+
+  # ─── Asterisk: PBX engine for trunk routing ───────────────
+  # Handles external calls (PSTN via SIP trunks). Step 4.
+  # For Step 3 (ext-to-ext), Kamailio routes directly.
   asterisk:
     image: mlan/asterisk:latest
     container_name: xyra-asterisk
@@ -30,7 +51,7 @@ services:
       - ./asterisk/sounds:/var/lib/asterisk/sounds/custom:rw
       - ./logs/asterisk:/var/log/asterisk:rw
 
-  # ─── Nginx: TLS termination for WSS (browser softphones) ───
+  # ─── Nginx: TLS termination for WSS (browser softphones) ──
   nginx:
     image: nginx:1.27-alpine
     container_name: xyra-nginx
