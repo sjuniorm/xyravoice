@@ -28,15 +28,9 @@ services:
     container_name: xyra-rtpengine
     restart: unless-stopped
     network_mode: host
-    command:
-      - "--interface=PUBLIC_IP_PLACEHOLDER"
-      - "--listen-ng=127.0.0.1:22222"
-      - "--port-min=30000"
-      - "--port-max=40000"
-      - "--log-stderr"
-      - "--log-level=6"
-      - "--no-fallback"
-      - "--delete-delay=0"
+    volumes:
+      - ./rtpengine/rtpengine.conf:/etc/rtpengine.conf:ro
+    command: ["rtpengine"]
 
   # ─── Asterisk: PBX engine for trunk routing ───────────────
   # Handles external calls (PSTN via SIP trunks). Step 4.
