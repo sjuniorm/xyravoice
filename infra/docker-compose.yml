@@ -14,9 +14,8 @@ services:
     volumes:
       - ./kamailio:/etc/kamailio:rw
       - ./logs/kamailio:/var/log/kamailio:rw
-    environment:
-      - KAMAILIO_CFG=/etc/kamailio/kamailio.cfg
-    command: ["kamailio", "-DD", "-E", "-f", "/etc/kamailio/kamailio.cfg"]
+    # Image entrypoint is already "kamailio -DD -E", we just pass extra args
+    command: ["-f", "/etc/kamailio/kamailio.cfg"]
     depends_on:
       - asterisk
 
