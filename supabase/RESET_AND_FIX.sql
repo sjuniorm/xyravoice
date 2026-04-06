@@ -91,7 +91,7 @@ drop policy if exists "Users can update own tenant" on public.tenants;
 
 create policy "Users can view own tenant"
   on public.tenants for select
-  using (id in (select tenant_id from public.profiles where id = auth.uid()));
+  using (id = public.get_tenant_id());
 
 create policy "Allow insert during signup"
   on public.tenants for insert
@@ -99,7 +99,7 @@ create policy "Allow insert during signup"
 
 create policy "Users can update own tenant"
   on public.tenants for update
-  using (id in (select tenant_id from public.profiles where id = auth.uid()));
+  using (id = public.get_tenant_id());
 
 -- profiles
 drop policy if exists "Users can view own tenant profiles" on public.profiles;
@@ -108,7 +108,10 @@ drop policy if exists "Allow insert during signup" on public.profiles;
 
 create policy "Users can view own tenant profiles"
   on public.profiles for select
-  using (tenant_id in (select tenant_id from public.profiles where id = auth.uid()));
+  using (
+    id = auth.uid()
+    or tenant_id = public.get_tenant_id()
+  );
 
 create policy "Users can update own profile"
   on public.profiles for update
