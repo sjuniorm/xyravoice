@@ -4,9 +4,13 @@
 --
 -- IMPORTANT: Replace 'CHANGE_ME_STRONG_PASSWORD' with a strong
 -- random password before running. Save the password — you'll
--- need it for the VPS .env file.
+-- need it for the VPS secrets file.
 --
--- To generate one: openssl rand -base64 24
+-- USE HEX (no special chars) so it's safe in connection URLs:
+--   openssl rand -hex 24
+--
+-- Avoid passwords with /, @, #, %, +, ? — Kamailio's URL parser
+-- doesn't decode percent-encoding.
 -- ============================================================
 
 -- 1. Create the role
