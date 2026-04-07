@@ -108,15 +108,27 @@ export default function Softphone() {
     phone.connect(config);
   }
 
+  // Normalize a dialed number for outbound PSTN routing.
+  //   "00<cc>..."  → "+<cc>..."   (European IDD prefix)
+  //   "+<cc>..."   → unchanged
+  //   "<digits>"   → unchanged   (could be local or extension)
+  function normalizeNumber(raw: string): string {
+    const trimmed = raw.replace(/\s+/g, "");
+    if (trimmed.startsWith("00")) return "+" + trimmed.slice(2);
+    return trimmed;
+  }
+
   function handleDial() {
     if (!dialInput) return;
 
+    const normalized = normalizeNumber(dialInput);
+
     // If the dialed number matches a known extension in our tenant,
     // translate it to the globally-unique SIP username so Kamailio
-    // can find the registration. Otherwise pass the number through
-    // as-is (for external/PSTN calls via trunks).
-    const match = extensions.find((e) => e.extension === dialInput);
-    const target = match ? match.sip_username : dialInput;
+    // can find the registration. Otherwise pass the (normalized)
+    // number through as-is for external/PSTN calls via trunks.
+    const match = extensions.find((e) => e.extension === normalized);
+    const target = match ? match.sip_username : normalized;
 
     phone.call(target);
     setDialInput("");
@@ -124,6 +136,13 @@ export default function Softphone() {
 
   function handleDialPadPress(key: string) {
     setDialInput((prev) => prev + key);
+  }
+
+  // Long-press 0 → "+" (standard mobile UX)
+  function handleDialPadLongPress(key: string) {
+    if (key === "0") {
+      setDialInput((prev) => prev + "+");
+    }
   }
 
   const isInCall =
@@ -352,7 +371,10 @@ export default function Softphone() {
                 )}
               </div>
 
-              <DialPad onPress={handleDialPadPress} />
+              <DialPad
+                onPress={handleDialPadPress}
+                onLongPress={handleDialPadLongPress}
+              />
 
               {/* Call button */}
               <button

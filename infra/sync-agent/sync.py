@@ -244,6 +244,11 @@ def gen_dialplan(trunks: list[Trunk], dids: list[Did]) -> str:
     # a registered local extension. The CALLERID(num) is the SIP username
     # of the calling browser (e.g. t_abc123_101) — we extract the tenant
     # slug from that and pick the matching trunk.
+    #
+    # Number normalization (defensive — softphone already does this):
+    #   leading "00"  → strip and prefix with "+"  (European IDD)
+    #   leading "+"   → unchanged
+    #   bare digits   → unchanged (assume already E.164 or local)
     lines += [
         "[from-kamailio]",
         "; Outbound: tenant prefix is encoded in the caller ID (SIP username).",
@@ -259,23 +264,36 @@ def gen_dialplan(trunks: list[Trunk], dids: list[Did]) -> str:
     else:
         for tenant_slug, trunk in tenant_to_trunk.items():
             cli = trunk.caller_id or trunk.username or "unknown"
+            slug_len = len(tenant_slug)
+
+            # Three patterns: bare digits, leading "+", and leading "00".
+            # Each routes through the same dial_ label for this tenant.
             lines += [
                 f"; Tenant {tenant_slug} → trunk {trunk.name}",
-                f"exten => _X.,1,GotoIf($[\"${{CALLERID(num):0:{len(tenant_slug)}}}\" = \"{tenant_slug}\"]?dial_{tenant_slug})",
-                f"exten => _+X.,1,GotoIf($[\"${{CALLERID(num):0:{len(tenant_slug)}}}\" = \"{tenant_slug}\"]?dial_{tenant_slug})",
-                f"exten => _X.,n(dial_{tenant_slug}),Set(CALLERID(all)=\"{cli}\" <{cli}>)",
-                f" same => n,Dial(PJSIP/${{EXTEN}}@{trunk.slug},60)",
+                # Bare digits: dial as-is
+                f"exten => _X.,1,GotoIf($[\"${{CALLERID(num):0:{slug_len}}}\" = \"{tenant_slug}\"]?dial_{tenant_slug})",
+                f" same => n,NoOp(No trunk matched caller ${{CALLERID(num)}})",
+                f" same => n,Hangup(34)",
+                f"exten => _X.,n(dial_{tenant_slug}),Set(DEST=${{EXTEN}})",
+                f" same => n,Set(CALLERID(all)=\"{cli}\" <{cli}>)",
+                f" same => n,Dial(PJSIP/${{DEST}}@{trunk.slug},60)",
                 " same => n,Hangup()",
-                f"exten => _+X.,n(dial_{tenant_slug}),Set(CALLERID(all)=\"{cli}\" <{cli}>)",
-                f" same => n,Dial(PJSIP/${{EXTEN}}@{trunk.slug},60)",
+                # Leading "+" (E.164): dial as-is
+                f"exten => _+X.,1,GotoIf($[\"${{CALLERID(num):0:{slug_len}}}\" = \"{tenant_slug}\"]?dial_{tenant_slug}_plus)",
+                f" same => n,Hangup(34)",
+                f"exten => _+X.,n(dial_{tenant_slug}_plus),Set(DEST=${{EXTEN}})",
+                f" same => n,Set(CALLERID(all)=\"{cli}\" <{cli}>)",
+                f" same => n,Dial(PJSIP/${{DEST}}@{trunk.slug},60)",
+                " same => n,Hangup()",
+                # Leading "00": strip and convert to +
+                f"exten => _00X.,1,GotoIf($[\"${{CALLERID(num):0:{slug_len}}}\" = \"{tenant_slug}\"]?dial_{tenant_slug}_idd)",
+                f" same => n,Hangup(34)",
+                f"exten => _00X.,n(dial_{tenant_slug}_idd),Set(DEST=+${{EXTEN:2}})",
+                f" same => n,Set(CALLERID(all)=\"{cli}\" <{cli}>)",
+                f" same => n,Dial(PJSIP/${{DEST}}@{trunk.slug},60)",
                 " same => n,Hangup()",
                 "",
             ]
-        lines += [
-            "exten => _X.,n,NoOp(No trunk matched caller ${CALLERID(num)})",
-            " same => n,Hangup(34)",
-            "",
-        ]
 
     # ─── from-trunk (inbound) ─────────────────────────────────
     # Provider sends an INVITE to us. We match the dialed number against
