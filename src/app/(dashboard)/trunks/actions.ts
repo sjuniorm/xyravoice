@@ -89,3 +89,84 @@ export async function deleteTrunk(id: string) {
   revalidatePath("/trunks");
   return { success: true };
 }
+
+// ─── DIDs ───────────────────────────────────────────────────
+// DIDs are inbound phone numbers (E.164) that the carrier routes to us.
+// Each DID is owned by one trunk and maps to a destination — for MVP
+// that's always an extension inside the same tenant.
+
+function normalizeE164(raw: string): string {
+  const trimmed = raw.replace(/\s+/g, "");
+  if (trimmed.startsWith("+")) return trimmed;
+  if (trimmed.startsWith("00")) return "+" + trimmed.slice(2);
+  return "+" + trimmed;
+}
+
+export async function createDid(trunkId: string, formData: FormData) {
+  const rawNumber = (formData.get("did_number") as string) ?? "";
+  const destinationValue = (formData.get("destination_value") as string) ?? "";
+
+  if (!rawNumber.trim() || !destinationValue.trim()) {
+    return { error: "Number and destination are required" };
+  }
+
+  const didNumber = normalizeE164(rawNumber);
+
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", user.id)
+    .single();
+  if (!profile) return { error: "Profile not found" };
+
+  const { error } = await supabase.from("dids").insert({
+    tenant_id: profile.tenant_id,
+    trunk_id: trunkId,
+    did_number: didNumber,
+    destination_type: "extension",
+    destination_value: destinationValue,
+  });
+
+  if (error) {
+    // Unique-constraint violations on `did_number` bubble up as 23505.
+    if (error.code === "23505") {
+      return { error: `Number ${didNumber} is already assigned to another tenant` };
+    }
+    return { error: error.message };
+  }
+
+  revalidatePath("/trunks");
+  return { success: true };
+}
+
+export async function toggleDid(id: string, enabled: boolean) {
+  const supabase = await createClient();
+
+  const { error } = await supabase
+    .from("dids")
+    .update({ enabled })
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/trunks");
+  return { success: true };
+}
+
+export async function deleteDid(id: string) {
+  const supabase = await createClient();
+
+  const { error } = await supabase.from("dids").delete().eq("id", id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/trunks");
+  return { success: true };
+}

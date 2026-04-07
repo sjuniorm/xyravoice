@@ -1,11 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import type { Trunk } from "@/types";
+import type { Trunk, Did, SipUser } from "@/types";
 import { toggleTrunk, deleteTrunk } from "./actions";
 import TrunkForm from "./trunk-form";
+import DidsSection from "./dids-section";
 
-export default function TrunkCard({ trunk }: { trunk: Trunk }) {
+interface TrunkCardProps {
+  trunk: Trunk;
+  dids: Did[];
+  extensions: SipUser[];
+}
+
+export default function TrunkCard({ trunk, dids, extensions }: TrunkCardProps) {
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -73,6 +80,12 @@ export default function TrunkCard({ trunk }: { trunk: Trunk }) {
             Delete
           </button>
         </div>
+
+        <DidsSection
+          trunkId={trunk.id}
+          dids={dids}
+          extensions={extensions}
+        />
       </div>
 
       {editing && (
