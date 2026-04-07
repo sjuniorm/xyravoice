@@ -196,14 +196,23 @@ def gen_pjsip(trunks: list[Trunk]) -> str:
             f"username={t.username or ''}",
             f"password={t.password or ''}",
             "",
-            f"[{t.slug}]",
+            # Two separate identify blocks. PJSIP iterates them and
+            # picks the first hit. Combining `match` and `match_header`
+            # in one block requires BOTH to match — useless as a fallback.
+            #
+            # Block 1: source-IP match (works when provider uses an IP
+            # that resolves from sip.<host>'s DNS A record).
+            f"[{t.slug}-ip]",
             "type=identify",
             f"endpoint={t.slug}",
-            # Match by From: header host AND by source IP. The header
-            # match catches calls coming from IPs not in the trunk's
-            # DNS A record (Zadarma uses a wider pool than what's in
-            # sip.zadarma.com). The IP match remains as a fallback.
             f"match={t.host}",
+            "",
+            # Block 2: From: header regex (catches IPs outside DNS
+            # — e.g. Zadarma sends from 185.45.152.180 even though
+            # sip.zadarma.com only resolves to 161/142/174).
+            f"[{t.slug}-hdr]",
+            "type=identify",
+            f"endpoint={t.slug}",
             f"match_header=From: <sip:.*@{t.host}.*",
             "",
         ]
