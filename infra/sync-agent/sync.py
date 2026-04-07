@@ -213,7 +213,9 @@ def gen_pjsip(trunks: list[Trunk]) -> str:
             f"[{t.slug}-hdr]",
             "type=identify",
             f"endpoint={t.slug}",
-            f"match_header=From: <sip:.*@{t.host}.*",
+            # Allow optional display name (e.g. `"BUZZ ALARMAS"`) before
+            # the URI. PJSIP uses POSIX regex on the full header value.
+            f"match_header=From: .*sip:.*@{t.host}.*",
             "",
         ]
 
