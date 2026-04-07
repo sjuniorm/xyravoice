@@ -47,6 +47,12 @@ services:
     container_name: xyra-asterisk
     restart: unless-stopped
     network_mode: host
+    # Disable bundled extras we don't use. WEBSMSD_PORT=0 stops the
+    # PHP webhook listener that otherwise floods logs trying to bind
+    # port 80 (which is owned by nginx).
+    environment:
+      - WEBSMSD_PORT=0
+      - SYSLOG_LEVEL=3
     volumes:
       - ./asterisk/etc:/etc/asterisk:rw
       - ./asterisk/sounds:/var/lib/asterisk/sounds/custom:rw
