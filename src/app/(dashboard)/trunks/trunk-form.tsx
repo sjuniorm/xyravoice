@@ -136,6 +136,24 @@ export default function TrunkForm({ trunk, onClose }: TrunkFormProps) {
             />
           </div>
 
+          <div>
+            <label htmlFor="caller_id" className="block text-sm font-medium text-neutral-300">
+              Outbound Caller ID <span className="text-neutral-500">(E.164)</span>
+            </label>
+            <input
+              id="caller_id"
+              name="caller_id"
+              type="text"
+              defaultValue={trunk?.caller_id ?? ""}
+              placeholder="+34824805991"
+              className="mt-1 block w-full rounded-lg border border-neutral-700 bg-navy-950 px-3 py-2 text-sm text-white placeholder-neutral-500 focus:border-xyra-500 focus:outline-none focus:ring-1 focus:ring-xyra-500"
+            />
+            <p className="mt-1 text-xs text-neutral-500">
+              The number shown to the people you call. Most providers require
+              this to match a number on your account.
+            </p>
+          </div>
+
           <div className="flex gap-3 pt-2">
             <button
               type="submit"

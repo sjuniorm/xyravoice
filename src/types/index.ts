@@ -38,6 +38,22 @@ export interface Trunk {
   password: string | null;
   transport: "udp" | "tcp" | "tls";
   enabled: boolean;
+  caller_id: string | null;
+  register: boolean;
+  from_user: string | null;
+  from_domain: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Did {
+  id: string;
+  tenant_id: string;
+  trunk_id: string;
+  did_number: string;
+  destination_type: "extension" | "callflow";
+  destination_value: string;
+  enabled: boolean;
   created_at: string;
   updated_at: string;
 }

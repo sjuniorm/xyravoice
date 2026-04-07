@@ -3,15 +3,22 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 
-export async function createTrunk(formData: FormData) {
-  const name = formData.get("name") as string;
-  const host = formData.get("host") as string;
-  const port = parseInt(formData.get("port") as string) || 5060;
-  const username = (formData.get("username") as string) || null;
-  const password = (formData.get("password") as string) || null;
-  const transport = (formData.get("transport") as string) || "udp";
+function parseTrunkForm(formData: FormData) {
+  return {
+    name: formData.get("name") as string,
+    host: formData.get("host") as string,
+    port: parseInt(formData.get("port") as string) || 5060,
+    username: (formData.get("username") as string) || null,
+    password: (formData.get("password") as string) || null,
+    transport: (formData.get("transport") as string) || "udp",
+    caller_id: (formData.get("caller_id") as string) || null,
+  };
+}
 
-  if (!name || !host) {
+export async function createTrunk(formData: FormData) {
+  const fields = parseTrunkForm(formData);
+
+  if (!fields.name || !fields.host) {
     return { error: "Name and host are required" };
   }
 
@@ -32,12 +39,7 @@ export async function createTrunk(formData: FormData) {
 
   const { error } = await supabase.from("trunks").insert({
     tenant_id: profile.tenant_id,
-    name,
-    host,
-    port,
-    username,
-    password,
-    transport,
+    ...fields,
   });
 
   if (error) return { error: error.message };
@@ -47,23 +49,15 @@ export async function createTrunk(formData: FormData) {
 }
 
 export async function updateTrunk(id: string, formData: FormData) {
-  const name = formData.get("name") as string;
-  const host = formData.get("host") as string;
-  const port = parseInt(formData.get("port") as string) || 5060;
-  const username = (formData.get("username") as string) || null;
-  const password = (formData.get("password") as string) || null;
-  const transport = (formData.get("transport") as string) || "udp";
+  const fields = parseTrunkForm(formData);
 
-  if (!name || !host) {
+  if (!fields.name || !fields.host) {
     return { error: "Name and host are required" };
   }
 
   const supabase = await createClient();
 
-  const { error } = await supabase
-    .from("trunks")
-    .update({ name, host, port, username, password, transport })
-    .eq("id", id);
+  const { error } = await supabase.from("trunks").update(fields).eq("id", id);
 
   if (error) return { error: error.message };
 
