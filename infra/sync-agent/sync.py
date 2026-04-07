@@ -382,6 +382,52 @@ def gen_dialplan(trunks: list[Trunk], dids: list[Did]) -> str:
                     "",
                 ]
 
+        # Some carriers (Zadarma included) send the inbound INVITE to
+        # `sip:<host>` (no user → Asterisk uses extension `s`) or
+        # `sip:<sip_account_id>@<host>` instead of the actual DID.
+        # Build dispatch entries that look at CHANNEL(endpoint) and
+        # jump to the trunk's first DID.
+        trunk_default_did: dict[str, str] = {}
+        for d in dids:
+            if d.trunk_id not in trunk_default_did:
+                trunk_default_did[d.trunk_id] = d.did_number.lstrip("+")
+
+        if trunk_default_did:
+            lines += [
+                "; Carrier-quirk fallbacks: dispatch by source endpoint",
+                "; when the To: URI is missing or contains the SIP account ID",
+                "; rather than the actual DID.",
+                "exten => s,1,NoOp(Inbound on ${CHANNEL(endpoint)} → s)",
+            ]
+            for trunk in trunks:
+                default_did = trunk_default_did.get(trunk.id)
+                if not default_did:
+                    continue
+                lines.append(
+                    f' same => n,GotoIf($["${{CHANNEL(endpoint)}}" = "{trunk.slug}"]?from-trunk,{default_did},1)'
+                )
+            lines += [
+                " same => n,Hangup(1)",
+                "",
+            ]
+
+            # Per-trunk SIP-username aliases (e.g. Zadarma sends to its
+            # account ID 263045@host on some routes).
+            seen_users: set[str] = set()
+            for trunk in trunks:
+                default_did = trunk_default_did.get(trunk.id)
+                if not default_did or not trunk.username:
+                    continue
+                if trunk.username in seen_users:
+                    continue
+                seen_users.add(trunk.username)
+                lines += [
+                    f"exten => {trunk.username},1,NoOp(Inbound on ${{CHANNEL(endpoint)}} → {trunk.username})",
+                    f' same => n,GotoIf($["${{CHANNEL(endpoint)}}" = "{trunk.slug}"]?from-trunk,{default_did},1)',
+                    " same => n,Hangup(1)",
+                    "",
+                ]
+
         lines += [
             "exten => _X.,1,NoOp(Unmatched inbound DID: ${EXTEN})",
             " same => n,Hangup(1)",
