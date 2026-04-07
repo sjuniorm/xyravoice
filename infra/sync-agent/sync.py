@@ -199,7 +199,12 @@ def gen_pjsip(trunks: list[Trunk]) -> str:
             f"[{t.slug}]",
             "type=identify",
             f"endpoint={t.slug}",
+            # Match by From: header host AND by source IP. The header
+            # match catches calls coming from IPs not in the trunk's
+            # DNS A record (Zadarma uses a wider pool than what's in
+            # sip.zadarma.com). The IP match remains as a fallback.
             f"match={t.host}",
+            f"match_header=From: <sip:.*@{t.host}.*",
             "",
         ]
 
