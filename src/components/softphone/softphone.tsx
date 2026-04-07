@@ -36,6 +36,26 @@ export default function Softphone() {
   const [sipDomain, setSipDomain] = useState("");
   const [extensions, setExtensions] = useState<SipUser[]>([]);
   const [selectedExt, setSelectedExt] = useState<SipUser | null>(null);
+  const [savedExtId, setSavedExtId] = useState<string | null>(null);
+
+  // Load saved config from localStorage on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("xyra-softphone-config");
+      if (raw) {
+        const cfg = JSON.parse(raw) as {
+          sipServer?: string;
+          sipDomain?: string;
+          selectedExtId?: string;
+        };
+        if (cfg.sipServer) setSipServer(cfg.sipServer);
+        if (cfg.sipDomain) setSipDomain(cfg.sipDomain);
+        if (cfg.selectedExtId) setSavedExtId(cfg.selectedExtId);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Load extensions from Supabase
   useEffect(() => {
@@ -49,6 +69,30 @@ export default function Softphone() {
         if (data) setExtensions(data as SipUser[]);
       });
   }, []);
+
+  // Once extensions load, restore the previously selected one
+  useEffect(() => {
+    if (savedExtId && extensions.length > 0 && !selectedExt) {
+      const ext = extensions.find((x) => x.id === savedExtId);
+      if (ext) setSelectedExt(ext);
+    }
+  }, [extensions, savedExtId, selectedExt]);
+
+  // Persist config whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "xyra-softphone-config",
+        JSON.stringify({
+          sipServer,
+          sipDomain,
+          selectedExtId: selectedExt?.id ?? null,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }, [sipServer, sipDomain, selectedExt]);
 
   function handleConnect() {
     if (!selectedExt || !sipServer || !sipDomain) {

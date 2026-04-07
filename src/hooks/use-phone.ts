@@ -59,11 +59,17 @@ export function usePhone(): PhoneState & PhoneActions {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Ensure audio element exists
+  // Ensure audio element exists and is attached to the DOM
   useEffect(() => {
     if (typeof window !== "undefined" && !audioRef.current) {
-      audioRef.current = new Audio();
-      audioRef.current.autoplay = true;
+      const el = document.createElement("audio");
+      el.autoplay = true;
+      el.setAttribute("playsinline", "true");
+      // Attach but keep it invisible — some browsers need an element in
+      // the DOM tree before they will start audio playback automatically.
+      el.style.display = "none";
+      document.body.appendChild(el);
+      audioRef.current = el;
     }
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -76,12 +82,32 @@ export function usePhone(): PhoneState & PhoneActions {
     if (!pc || !audioRef.current) return;
 
     const remoteStream = new MediaStream();
+    audioRef.current.srcObject = remoteStream;
+
+    // Add any tracks that already exist on receivers
     pc.getReceivers().forEach((receiver) => {
       if (receiver.track) {
         remoteStream.addTrack(receiver.track);
       }
     });
-    audioRef.current.srcObject = remoteStream;
+
+    // And keep adding tracks as they arrive (the usual case — the remote
+    // description is set after Established fires, so receivers don't have
+    // tracks yet at the moment we get here).
+    pc.ontrack = (event) => {
+      event.streams[0]?.getTracks().forEach((track) => {
+        if (!remoteStream.getTracks().find((t) => t.id === track.id)) {
+          remoteStream.addTrack(track);
+        }
+      });
+      // Force playback in case autoplay was blocked
+      audioRef.current?.play().catch(() => {
+        // ignore — user gesture already happened via the Accept/Call button
+      });
+    };
+
+    // Attempt immediate playback as well
+    audioRef.current.play().catch(() => {});
   }
 
   function startTimer() {
