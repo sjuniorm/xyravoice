@@ -338,8 +338,11 @@ def gen_dialplan(trunks: list[Trunk], dids: list[Did]) -> str:
 
 # ─── Reload ─────────────────────────────────────────────────
 def reload_asterisk() -> None:
+    # `pjsip reload` is not a recognized command on this Asterisk build —
+    # we have to reload the modules individually. `module reload res_pjsip.so`
+    # picks up endpoint/auth/aor/identify/registration changes.
     cmds = [
-        ["docker", "exec", ASTERISK_CTNR, "asterisk", "-rx", "pjsip reload"],
+        ["docker", "exec", ASTERISK_CTNR, "asterisk", "-rx", "module reload res_pjsip.so"],
         ["docker", "exec", ASTERISK_CTNR, "asterisk", "-rx", "dialplan reload"],
     ]
     for cmd in cmds:
