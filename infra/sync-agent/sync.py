@@ -148,6 +148,24 @@ def fetch_state() -> tuple[list[Trunk], list[Did]]:
 
 
 # ─── Generators ─────────────────────────────────────────────
+# Known SIP/RTP source-IP ranges for major providers, indexed by the
+# substring of the trunk host that identifies them. PJSIP only resolves
+# the FQDN's A record, so when a provider sends INVITEs from media-relay
+# IPs that aren't in that record, we need to add the wider subnet here
+# or inbound calls will be rejected as "No matching endpoint".
+_PROVIDER_SUBNETS: dict[str, list[str]] = {
+    "zadarma.com": ["185.45.152.0/24", "195.122.19.0/24"],
+}
+
+
+def _provider_cidrs(host: str) -> list[str]:
+    host_l = host.lower()
+    for needle, cidrs in _PROVIDER_SUBNETS.items():
+        if needle in host_l:
+            return cidrs
+    return []
+
+
 def gen_pjsip(trunks: list[Trunk]) -> str:
     """
     Generate the per-trunk pjsip section.
@@ -200,12 +218,15 @@ def gen_pjsip(trunks: list[Trunk]) -> str:
             # picks the first hit. Combining `match` and `match_header`
             # in one block requires BOTH to match — useless as a fallback.
             #
-            # Block 1: source-IP match (works when provider uses an IP
-            # that resolves from sip.<host>'s DNS A record).
+            # Block 1: source-IP match. We list both the FQDN (which
+            # PJSIP resolves via DNS) and known provider subnets, since
+            # carriers like Zadarma send INVITEs from media-relay IPs
+            # outside their advertised SIP DNS A record.
             f"[{t.slug}-ip]",
             "type=identify",
             f"endpoint={t.slug}",
             f"match={t.host}",
+            *([f"match={cidr}" for cidr in _provider_cidrs(t.host)]),
             "",
             # Block 2: From: header regex (catches IPs outside DNS
             # — e.g. Zadarma sends from 185.45.152.180 even though
