@@ -824,11 +824,36 @@ def process_cdr(tenant_map: dict[str, str], trunk_to_tenant: dict[str, str]) -> 
     rows_to_insert: list[dict] = []
 
     for row in reader:
+        # The CDR CSV has 16 base fields, but lastdata (field 8) can
+        # contain unquoted commas (e.g. "PJSIP/user@host,60") which
+        # shifts subsequent columns. Parse from the known-fixed ends:
+        #   - Fields 0-6 are always clean (no embedded commas).
+        #   - The last 7 fields (start, answer, end, duration, billsec,
+        #     disposition, userfield) are always clean.
+        #   - Everything in between is lastapp + lastdata (may have extra commas).
         if len(row) < 15:
             continue
-        uniqueid, clid, src, dst, dcontext, channel, dstchannel, \
-            lastapp, lastdata, start, answer, end, duration, billsec, \
-            disposition = row[:15]
+
+        uniqueid = row[0]
+        clid = row[1]
+        src = row[2]
+        dst = row[3]
+        dcontext = row[4]
+        channel = row[5]
+        dstchannel = row[6]
+
+        # Last 7 fields from the end: start, answer, end, duration, billsec, disposition, userfield
+        disposition = row[-2] if len(row) >= 2 else ""
+        billsec = row[-3] if len(row) >= 3 else "0"
+        duration = row[-4] if len(row) >= 4 else "0"
+        end = row[-5] if len(row) >= 5 else ""
+        answer = row[-6] if len(row) >= 6 else ""
+        start = row[-7] if len(row) >= 7 else ""
+
+        # Everything between field 7 and -7 is lastapp + lastdata (joined)
+        middle = row[7:-7] if len(row) > 14 else row[7:9]
+        lastapp = middle[0] if middle else ""
+        lastdata = ",".join(middle[1:]) if len(middle) > 1 else ""
 
         direction = _detect_direction(dcontext)
         status = _disposition_to_status(disposition)
