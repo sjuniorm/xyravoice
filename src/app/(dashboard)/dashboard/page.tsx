@@ -4,8 +4,8 @@ import {
   Phone,
   Cable,
   GitBranch,
+  PhoneIncoming,
   Building2,
-  ShieldCheck,
   ArrowRight,
 } from "lucide-react";
 
@@ -41,6 +41,10 @@ export default async function DashboardPage() {
     .from("call_flows")
     .select("*", { count: "exact", head: true });
 
+  const { count: didCount } = await supabase
+    .from("dids")
+    .select("*", { count: "exact", head: true });
+
   const stats = [
     {
       label: "Extensions",
@@ -59,21 +63,20 @@ export default async function DashboardPage() {
       bg: "bg-blue-500/10",
     },
     {
+      label: "DIDs",
+      value: didCount ?? 0,
+      icon: PhoneIncoming,
+      href: "/trunks",
+      color: "text-violet-400",
+      bg: "bg-violet-500/10",
+    },
+    {
       label: "Call Flows",
       value: flowCount ?? 0,
       icon: GitBranch,
       href: "/call-flow",
       color: "text-emerald-400",
       bg: "bg-emerald-500/10",
-    },
-    {
-      label: "Role",
-      value: profile?.role || "admin",
-      icon: ShieldCheck,
-      href: "/settings",
-      color: "text-amber-400",
-      bg: "bg-amber-500/10",
-      capitalize: true,
     },
   ];
 
@@ -117,11 +120,7 @@ export default async function DashboardPage() {
                   className="text-neutral-700 transition group-hover:text-neutral-400"
                 />
               </div>
-              <p
-                className={`mt-4 text-2xl font-bold ${
-                  stat.capitalize ? "capitalize" : ""
-                }`}
-              >
+              <p className="mt-4 text-2xl font-bold">
                 {stat.value}
               </p>
               <p className="mt-0.5 text-sm text-neutral-400">{stat.label}</p>
@@ -163,15 +162,15 @@ export default async function DashboardPage() {
             <span className="text-sm text-neutral-300">Supabase Connected</span>
           </div>
           <div className="flex items-center gap-3">
-            <div className="h-2 w-2 rounded-full bg-neutral-600" />
-            <span className="text-sm text-neutral-400">
-              SIP Server — Not configured
+            <div className={`h-2 w-2 rounded-full ${(trunkCount ?? 0) > 0 ? "bg-emerald-400" : "bg-neutral-600"}`} />
+            <span className={`text-sm ${(trunkCount ?? 0) > 0 ? "text-neutral-300" : "text-neutral-400"}`}>
+              SIP Server — {(trunkCount ?? 0) > 0 ? `${trunkCount} trunk${trunkCount !== 1 ? "s" : ""} active` : "No trunks configured"}
             </span>
           </div>
           <div className="flex items-center gap-3">
-            <div className="h-2 w-2 rounded-full bg-neutral-600" />
-            <span className="text-sm text-neutral-400">
-              WebRTC — Step 8
+            <div className={`h-2 w-2 rounded-full ${(extensionCount ?? 0) > 0 ? "bg-emerald-400" : "bg-neutral-600"}`} />
+            <span className={`text-sm ${(extensionCount ?? 0) > 0 ? "text-neutral-300" : "text-neutral-400"}`}>
+              WebRTC — {(extensionCount ?? 0) > 0 ? `${extensionCount} extension${extensionCount !== 1 ? "s" : ""} ready` : "No extensions"}
             </span>
           </div>
         </div>
