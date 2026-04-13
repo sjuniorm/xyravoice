@@ -27,13 +27,16 @@ function formatDuration(seconds: number): string {
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
+const DEFAULT_SIP_SERVER = "wss://sip.xyrachat.com/ws";
+const DEFAULT_SIP_DOMAIN = "sip.xyrachat.com";
+
 export default function Softphone() {
   const phone = usePhone();
   const [minimized, setMinimized] = useState(true);
   const [dialInput, setDialInput] = useState("");
   const [showConfig, setShowConfig] = useState(false);
-  const [sipServer, setSipServer] = useState("");
-  const [sipDomain, setSipDomain] = useState("");
+  const [sipServer, setSipServer] = useState(DEFAULT_SIP_SERVER);
+  const [sipDomain, setSipDomain] = useState(DEFAULT_SIP_DOMAIN);
   const [extensions, setExtensions] = useState<SipUser[]>([]);
   const [selectedExt, setSelectedExt] = useState<SipUser | null>(null);
   const [savedExtId, setSavedExtId] = useState<string | null>(null);
@@ -95,14 +98,18 @@ export default function Softphone() {
   }, [sipServer, sipDomain, selectedExt]);
 
   function handleConnect() {
-    if (!selectedExt || !sipServer || !sipDomain) {
+    // Auto-select first extension if none chosen yet
+    const ext = selectedExt ?? extensions[0] ?? null;
+    if (ext && !selectedExt) setSelectedExt(ext);
+
+    if (!ext) {
       setShowConfig(true);
       return;
     }
     const config: PhoneConfig = {
       sipServer,
-      sipUsername: selectedExt.sip_username,
-      sipPassword: selectedExt.sip_password,
+      sipUsername: ext.sip_username,
+      sipPassword: ext.sip_password,
       sipDomain,
     };
     phone.connect(config);
