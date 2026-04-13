@@ -1,12 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
-import type { Trunk, Did, SipUser } from "@/types";
+import type { Trunk, Did, SipUser, CallFlow } from "@/types";
 import TrunkCard from "./trunk-card";
 import AddTrunkButton from "./add-trunk-button";
 
 export default async function TrunksPage() {
   const supabase = await createClient();
 
-  const [{ data: trunks }, { data: dids }, { data: sipUsers }] =
+  const [{ data: trunks }, { data: dids }, { data: sipUsers }, { data: callFlows }] =
     await Promise.all([
       supabase.from("trunks").select("*").order("created_at", { ascending: true }),
       supabase.from("dids").select("*").order("did_number", { ascending: true }),
@@ -15,11 +15,17 @@ export default async function TrunksPage() {
         .select("*")
         .eq("enabled", true)
         .order("extension", { ascending: true }),
+      supabase
+        .from("call_flows")
+        .select("id, name, is_active")
+        .eq("is_active", true)
+        .order("name", { ascending: true }),
     ]);
 
   const trunkList = (trunks ?? []) as Trunk[];
   const didList = (dids ?? []) as Did[];
   const extensions = (sipUsers ?? []) as SipUser[];
+  const flows = (callFlows ?? []) as Pick<CallFlow, "id" | "name" | "is_active">[];
 
   return (
     <div>
@@ -47,6 +53,7 @@ export default async function TrunksPage() {
               trunk={trunk}
               dids={didList.filter((d) => d.trunk_id === trunk.id)}
               extensions={extensions}
+              callFlows={flows}
             />
           ))}
         </div>

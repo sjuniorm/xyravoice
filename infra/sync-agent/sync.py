@@ -30,6 +30,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import json
+
 try:
     import psycopg2
     import psycopg2.extras
@@ -93,8 +95,26 @@ class Did:
     enabled: bool
 
 
+@dataclass
+class CallFlow:
+    id: str
+    tenant_id: str
+    name: str
+    steps: list[dict]
+    is_active: bool
+
+    @property
+    def context(self) -> str:
+        """Asterisk context name for this call flow."""
+        return f"cf-{self.id.replace('-', '')[:8]}"
+
+    @property
+    def tenant_slug(self) -> str:
+        return f"t_{self.tenant_id.replace('-', '')[:8]}"
+
+
 # ─── DB ─────────────────────────────────────────────────────
-def fetch_state() -> tuple[list[Trunk], list[Did]]:
+def fetch_state() -> tuple[list[Trunk], list[Did], list[CallFlow]]:
     if not DB_URL:
         raise RuntimeError("SYNC_DB_URL not set")
 
@@ -144,7 +164,23 @@ def fetch_state() -> tuple[list[Trunk], list[Did]]:
                 )
                 for r in cur.fetchall()
             ]
-    return trunks, dids
+
+            cur.execute("""
+                select id, tenant_id, name, steps, is_active
+                from public.call_flows
+                where is_active = true
+            """)
+            call_flows = [
+                CallFlow(
+                    id=str(r["id"]),
+                    tenant_id=str(r["tenant_id"]),
+                    name=r["name"],
+                    steps=json.loads(r["steps"]) if isinstance(r["steps"], str) else r["steps"],
+                    is_active=r["is_active"],
+                )
+                for r in cur.fetchall()
+            ]
+    return trunks, dids, call_flows
 
 
 # ─── Generators ─────────────────────────────────────────────
@@ -257,7 +293,169 @@ def gen_pjsip(trunks: list[Trunk]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def gen_dialplan(trunks: list[Trunk], dids: list[Did]) -> str:
+def _resolve_dial_target(dest: str, tenant_slug: str, trunk: Trunk | None) -> str:
+    """
+    Turn a destination string into an Asterisk Dial() target.
+
+    Destination formats from the UI:
+      "ext:101"       → local extension via Kamailio
+      "101" (1-4 dig) → local extension via Kamailio
+      "+34600123456"  → external number via tenant trunk
+      "0034600123456" → external number via tenant trunk
+    """
+    # Explicit extension prefix from IVR option values
+    if dest.startswith("ext:"):
+        ext = dest[4:]
+        return f"PJSIP/{tenant_slug}_{ext}@kamailio-out"
+    # Short digit string = extension
+    if dest.isdigit() and len(dest) <= 4:
+        return f"PJSIP/{tenant_slug}_{dest}@kamailio-out"
+    # External number → route via trunk
+    if trunk:
+        return f"PJSIP/{dest}@{trunk.slug}"
+    # Fallback: try via Kamailio (will hit from-kamailio outbound)
+    return f"PJSIP/{dest}@kamailio-out"
+
+
+def _gen_callflow_context(cf: CallFlow, trunk: Trunk | None) -> list[str]:
+    """
+    Generate an Asterisk dialplan context for a single call flow.
+
+    Each step type:
+      ring_group  — Dial() with & for simultaneous, chained for sequential
+      forward     — Dial() to destination (always/busy/no_answer)
+      ivr         — Answer + WaitExten, digit extensions for each option
+
+    Steps chain sequentially on the `s` extension. If DIALSTATUS != ANSWER
+    after a Dial(), execution falls through to the next step.
+    """
+    tenant = cf.tenant_slug
+    lines: list[str] = [
+        f"; ─── Call Flow: {cf.name} (tenant {tenant}) ──────────────",
+        f"[{cf.context}]",
+    ]
+
+    if not cf.steps:
+        lines += [
+            "exten => s,1,NoOp(Empty call flow)",
+            " same => n,Hangup()",
+            "",
+        ]
+        return lines
+
+    # We build the `s` extension incrementally. IVR steps are special:
+    # they branch via WaitExten, so we add digit extensions separately.
+    s_lines: list[str] = ["exten => s,1,Answer()"]
+    ivr_extensions: list[str] = []
+    step_count = len(cf.steps)
+
+    for i, step in enumerate(cf.steps):
+        step_type = step.get("type", "")
+        is_last = i == step_count - 1
+        label = f"step{i}"
+        s_lines.append(f" same => n({label}),NoOp(Step {i+1}: {step_type})")
+
+        if step_type == "ring_group":
+            members = step.get("members", [])
+            strategy = step.get("strategy", "simultaneous")
+            timeout = step.get("timeout", 30)
+
+            if not members:
+                s_lines.append(f" same => n,NoOp(Ring group has no members)")
+            elif strategy == "simultaneous":
+                targets = "&".join(
+                    f"PJSIP/{tenant}_{m}@kamailio-out" for m in members
+                )
+                s_lines.append(f" same => n,Dial({targets},{timeout})")
+                if not is_last:
+                    s_lines.append(
+                        f' same => n,GotoIf($["${{DIALSTATUS}}" = "ANSWER"]?done)'
+                    )
+            else:
+                # Sequential: try each member one by one
+                per_member_timeout = max(timeout // len(members), 10)
+                for m in members:
+                    target = f"PJSIP/{tenant}_{m}@kamailio-out"
+                    s_lines.append(f" same => n,Dial({target},{per_member_timeout})")
+                    s_lines.append(
+                        f' same => n,GotoIf($["${{DIALSTATUS}}" = "ANSWER"]?done)'
+                    )
+
+        elif step_type == "forward":
+            mode = step.get("mode", "always")
+            dest = step.get("destination", "")
+            if not dest:
+                s_lines.append(f" same => n,NoOp(Forward has no destination)")
+            else:
+                target = _resolve_dial_target(dest, tenant, trunk)
+                if mode == "always":
+                    s_lines.append(f" same => n,Dial({target},60)")
+                elif mode == "busy":
+                    # Only forward if previous step returned BUSY
+                    s_lines.append(
+                        f' same => n,GotoIf($["${{DIALSTATUS}}" != "BUSY"]?step{i}_skip)'
+                    )
+                    s_lines.append(f" same => n,Dial({target},60)")
+                    s_lines.append(f" same => n(step{i}_skip),NoOp(Not busy — skipping forward)")
+                elif mode == "no_answer":
+                    # Only forward if previous step returned NOANSWER or CHANUNAVAIL
+                    s_lines.append(
+                        f' same => n,GotoIf($["${{DIALSTATUS}}" = "ANSWER"]?done)'
+                    )
+                    s_lines.append(f" same => n,Dial({target},60)")
+
+        elif step_type == "ivr":
+            # IVR: play prompt (beep for MVP — real TTS/audio is Phase 2)
+            # then WaitExten for DTMF input.
+            ivr_timeout = 10
+            s_lines.append(f" same => n,Background(beep)")
+            s_lines.append(f" same => n,WaitExten({ivr_timeout})")
+            # If WaitExten times out, it jumps to exten `t`. If no `t`
+            # extension, Asterisk hangs up. We'll add a `t` extension
+            # that falls through to the next step (if any) or hangs up.
+
+            # Generate digit extensions for each IVR option
+            options = step.get("options", {})
+            for digit, dest in options.items():
+                if not dest:
+                    continue
+                target = _resolve_dial_target(dest, tenant, trunk)
+                ivr_extensions += [
+                    f"exten => {digit},1,NoOp(IVR option {digit})",
+                    f" same => n,Dial({target},60)",
+                    " same => n,Hangup()",
+                ]
+
+            # Invalid input → replay IVR
+            ivr_extensions += [
+                f"exten => i,1,Playback(pbx-invalid)",
+                f" same => n,Goto(s,{label})",
+            ]
+
+            # Timeout → fall through to next step or hangup
+            if not is_last:
+                ivr_extensions += [
+                    f"exten => t,1,NoOp(IVR timeout — continuing to next step)",
+                    f" same => n,Goto(s,step{i+1})",
+                ]
+            else:
+                ivr_extensions += [
+                    "exten => t,1,NoOp(IVR timeout — no more steps)",
+                    " same => n,Hangup()",
+                ]
+
+    s_lines.append(" same => n(done),Hangup()")
+
+    lines += s_lines
+    if ivr_extensions:
+        lines.append("")
+        lines += ivr_extensions
+    lines.append("")
+
+    return lines
+
+
+def gen_dialplan(trunks: list[Trunk], dids: list[Did], call_flows: list[CallFlow] | None = None) -> str:
     """
     Generate the dialplan fragment that handles:
       [from-kamailio]   — outbound: dial via the tenant's trunk
@@ -373,14 +571,28 @@ def gen_dialplan(trunks: list[Trunk], dids: list[Did]) -> str:
                     " same => n,Hangup()",
                     "",
                 ]
-            else:
-                # callflow — TODO Step 5
-                lines += [
-                    f"; DID {d.did_number} → callflow {d.destination_value} (TODO)",
-                    f"exten => {did_no_plus},1,NoOp(Callflow not implemented yet)",
-                    " same => n,Hangup(1)",
-                    "",
-                ]
+            elif d.destination_type == "callflow":
+                # Find the call flow to get its context name
+                cf = next(
+                    (f for f in (call_flows or []) if f.id == d.destination_value and f.is_active),
+                    None,
+                )
+                if cf:
+                    lines += [
+                        f"; DID {d.did_number} → call flow \"{cf.name}\" (tenant {tenant_slug})",
+                        f"exten => +{did_no_plus},1,NoOp(Inbound for DID {d.did_number} → callflow)",
+                        f" same => n,Goto({cf.context},s,1)",
+                        f"exten => {did_no_plus},1,NoOp(Inbound for DID {d.did_number} → callflow)",
+                        f" same => n,Goto({cf.context},s,1)",
+                        "",
+                    ]
+                else:
+                    lines += [
+                        f"; DID {d.did_number} → callflow {d.destination_value} (NOT FOUND / INACTIVE)",
+                        f"exten => {did_no_plus},1,NoOp(Callflow not found: {d.destination_value})",
+                        " same => n,Hangup(1)",
+                        "",
+                    ]
 
         # Some carriers (Zadarma included) send the inbound INVITE to
         # `sip:<host>` (no user → Asterisk uses extension `s`) or
@@ -434,6 +646,19 @@ def gen_dialplan(trunks: list[Trunk], dids: list[Did]) -> str:
             "",
         ]
 
+    # ─── Call flow contexts ──────────────────────────────────
+    if call_flows:
+        lines += [
+            "; ============================================================",
+            "; Call Flow contexts — generated from public.call_flows",
+            "; ============================================================",
+            "",
+        ]
+        for cf in call_flows:
+            # Find the tenant's trunk for external number routing
+            cf_trunk = tenant_to_trunk.get(cf.tenant_slug)
+            lines += _gen_callflow_context(cf, cf_trunk)
+
     return "\n".join(lines) + "\n"
 
 
@@ -475,14 +700,14 @@ def write_if_changed(path: Path, content: str) -> bool:
 
 def tick() -> None:
     try:
-        trunks, dids = fetch_state()
-        log.info("fetched %d trunks, %d dids", len(trunks), len(dids))
+        trunks, dids, call_flows = fetch_state()
+        log.info("fetched %d trunks, %d dids, %d call_flows", len(trunks), len(dids), len(call_flows))
     except Exception as e:
         log.error("fetch_state failed: %s", e)
         return
 
     pjsip = gen_pjsip(trunks)
-    dialplan = gen_dialplan(trunks, dids)
+    dialplan = gen_dialplan(trunks, dids, call_flows)
 
     changed = False
     changed |= write_if_changed(PJSIP_OUT, pjsip)

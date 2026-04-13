@@ -104,6 +104,7 @@ function normalizeE164(raw: string): string {
 
 export async function createDid(trunkId: string, formData: FormData) {
   const rawNumber = (formData.get("did_number") as string) ?? "";
+  const destinationType = (formData.get("destination_type") as string) || "extension";
   const destinationValue = (formData.get("destination_value") as string) ?? "";
 
   if (!rawNumber.trim() || !destinationValue.trim()) {
@@ -130,7 +131,7 @@ export async function createDid(trunkId: string, formData: FormData) {
     tenant_id: profile.tenant_id,
     trunk_id: trunkId,
     did_number: didNumber,
-    destination_type: "extension",
+    destination_type: destinationType,
     destination_value: destinationValue,
   });
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { Trunk, Did, SipUser } from "@/types";
+import type { Trunk, Did, SipUser, CallFlow } from "@/types";
 import { toggleTrunk, deleteTrunk } from "./actions";
 import TrunkForm from "./trunk-form";
 import DidsSection from "./dids-section";
@@ -10,9 +10,10 @@ interface TrunkCardProps {
   trunk: Trunk;
   dids: Did[];
   extensions: SipUser[];
+  callFlows: Pick<CallFlow, "id" | "name" | "is_active">[];
 }
 
-export default function TrunkCard({ trunk, dids, extensions }: TrunkCardProps) {
+export default function TrunkCard({ trunk, dids, extensions, callFlows }: TrunkCardProps) {
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -85,6 +86,7 @@ export default function TrunkCard({ trunk, dids, extensions }: TrunkCardProps) {
           trunkId={trunk.id}
           dids={dids}
           extensions={extensions}
+          callFlows={callFlows}
         />
       </div>
 
