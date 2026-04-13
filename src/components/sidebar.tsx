@@ -9,6 +9,7 @@ import {
   Phone,
   Cable,
   GitBranch,
+  ClockArrowUp,
   Settings,
   LogOut,
   X,
@@ -26,6 +27,7 @@ const navItems: NavItem[] = [
   { href: "/extensions", label: "Extensions", icon: Phone },
   { href: "/trunks", label: "Trunks", icon: Cable },
   { href: "/call-flow", label: "Call Flow", icon: GitBranch },
+  { href: "/call-history", label: "Call History", icon: ClockArrowUp },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

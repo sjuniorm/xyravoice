@@ -58,6 +58,22 @@ export interface Did {
   updated_at: string;
 }
 
+export interface CallLog {
+  id: string;
+  tenant_id: string;
+  direction: "inbound" | "outbound" | "internal";
+  caller: string;
+  callee: string;
+  status: "answered" | "missed" | "busy" | "failed" | "no_answer";
+  started_at: string;
+  answered_at: string | null;
+  ended_at: string | null;
+  duration_secs: number;
+  trunk_name: string | null;
+  channel_id: string | null;
+  created_at: string;
+}
+
 // Call flow step types
 export interface IvrStep {
   type: "ivr";

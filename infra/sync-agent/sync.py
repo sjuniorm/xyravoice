@@ -48,6 +48,8 @@ ONESHOT = os.environ.get("SYNC_ONESHOT", "").lower() in ("1", "true", "yes")
 
 PJSIP_OUT = OUTPUT_DIR / "pjsip_realtime.conf"
 DIALPLAN_OUT = OUTPUT_DIR / "extensions_realtime.conf"
+CDR_CSV = Path(os.environ.get("SYNC_CDR_CSV", "/opt/xyravoice/infra/logs/asterisk/cdr-custom/Master.csv"))
+CDR_OFFSET_FILE = Path(os.environ.get("SYNC_CDR_OFFSET", "/opt/xyravoice/infra/sync-agent/.cdr_offset"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -685,6 +687,193 @@ def reload_asterisk() -> None:
             log.error("reload failed (%s): %s", " ".join(cmd[-2:]), e)
 
 
+# ─── CDR → Supabase ────────────────────────────────────────
+# cdr_custom.conf writes CSV lines with these fields (in order):
+#   uniqueid, clid, src, dst, dcontext, channel, dstchannel,
+#   lastapp, lastdata, start, answer, end, duration, billsec,
+#   disposition, userfield
+#
+# We tail the CSV from a saved byte offset so we only process new
+# lines on each tick. The offset is persisted to a file so it
+# survives restarts.
+
+import csv
+import io
+import re
+
+_TENANT_RE = re.compile(r"^(t_[0-9a-f]{8})_")
+
+
+def _read_offset() -> int:
+    try:
+        return int(CDR_OFFSET_FILE.read_text().strip())
+    except Exception:
+        return 0
+
+
+def _write_offset(offset: int) -> None:
+    CDR_OFFSET_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CDR_OFFSET_FILE.write_text(str(offset))
+
+
+def _disposition_to_status(disp: str) -> str:
+    d = disp.strip().upper()
+    if d == "ANSWERED":
+        return "answered"
+    if d == "BUSY":
+        return "busy"
+    if d == "NO ANSWER":
+        return "no_answer"
+    if d == "FAILED":
+        return "failed"
+    return "missed"
+
+
+def _detect_direction(dcontext: str) -> str:
+    if dcontext == "from-trunk" or dcontext.startswith("cf-"):
+        return "inbound"
+    if dcontext == "from-kamailio":
+        return "outbound"
+    return "internal"
+
+
+def _extract_tenant_slug(src: str, dst: str, channel: str) -> str | None:
+    """Try to extract the tenant slug from caller/callee/channel."""
+    for val in (src, dst, channel):
+        m = _TENANT_RE.search(val)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _resolve_tenant_id(slug: str | None, tenant_map: dict[str, str]) -> str | None:
+    """Map tenant slug → tenant UUID using a pre-fetched lookup."""
+    if not slug:
+        return None
+    return tenant_map.get(slug)
+
+
+def _fetch_tenant_map() -> dict[str, str]:
+    """Return {tenant_slug: tenant_id} for all tenants."""
+    if not DB_URL:
+        return {}
+    result: dict[str, str] = {}
+    with psycopg2.connect(DB_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM public.tenants")
+            for (tid,) in cur.fetchall():
+                tid_str = str(tid)
+                slug = f"t_{tid_str.replace('-', '')[:8]}"
+                result[slug] = tid_str
+    return result
+
+
+def process_cdr(tenant_map: dict[str, str]) -> None:
+    """Read new CDR lines from Master.csv and insert into call_logs."""
+    if not CDR_CSV.exists():
+        return
+
+    offset = _read_offset()
+    file_size = CDR_CSV.stat().st_size
+    if file_size <= offset:
+        if file_size < offset:
+            # File was truncated/rotated — reset
+            offset = 0
+        else:
+            return  # no new data
+
+    with open(CDR_CSV, "r") as f:
+        f.seek(offset)
+        new_data = f.read()
+        new_offset = f.tell()
+
+    if not new_data.strip():
+        _write_offset(new_offset)
+        return
+
+    reader = csv.reader(io.StringIO(new_data))
+    rows_to_insert: list[dict] = []
+
+    for row in reader:
+        if len(row) < 15:
+            continue
+        uniqueid, clid, src, dst, dcontext, channel, dstchannel, \
+            lastapp, lastdata, start, answer, end, duration, billsec, \
+            disposition = row[:15]
+
+        direction = _detect_direction(dcontext)
+        status = _disposition_to_status(disposition)
+        tenant_slug = _extract_tenant_slug(src, dst, channel)
+        tenant_id = _resolve_tenant_id(tenant_slug, tenant_map)
+
+        if not tenant_id:
+            log.warning("CDR: could not resolve tenant for %s (src=%s dst=%s)", uniqueid, src, dst)
+            continue
+
+        # Clean up caller/callee display: strip tenant prefix for readability
+        caller_display = src
+        callee_display = dst
+        if _TENANT_RE.match(src):
+            # Extract just the extension number
+            parts = src.split("_", 2)
+            if len(parts) >= 3:
+                caller_display = parts[2]
+        if _TENANT_RE.match(dst):
+            parts = dst.split("_", 2)
+            if len(parts) >= 3:
+                callee_display = parts[2]
+
+        rec: dict = {
+            "tenant_id": tenant_id,
+            "direction": direction,
+            "caller": caller_display,
+            "callee": callee_display,
+            "status": status,
+            "started_at": start or None,
+            "answered_at": answer if answer else None,
+            "ended_at": end if end else None,
+            "duration_secs": int(billsec) if billsec else 0,
+            "channel_id": uniqueid,
+        }
+
+        # Try to identify the trunk name from the channel
+        if direction == "outbound" and "PJSIP/" in (dstchannel or ""):
+            # e.g. PJSIP/trunk_abc123-00000001
+            trunk_part = dstchannel.split("/", 1)[-1].split("-")[0]
+            if trunk_part.startswith("trunk_"):
+                rec["trunk_name"] = trunk_part
+        elif direction == "inbound":
+            chan_part = channel.split("/", 1)[-1].split("-")[0] if "/" in channel else ""
+            if chan_part.startswith("trunk_"):
+                rec["trunk_name"] = chan_part
+
+        rows_to_insert.append(rec)
+
+    if rows_to_insert:
+        try:
+            with psycopg2.connect(DB_URL) as conn:
+                with conn.cursor() as cur:
+                    for rec in rows_to_insert:
+                        cur.execute("""
+                            INSERT INTO public.call_logs
+                                (tenant_id, direction, caller, callee, status,
+                                 started_at, answered_at, ended_at, duration_secs,
+                                 trunk_name, channel_id)
+                            VALUES
+                                (%(tenant_id)s, %(direction)s, %(caller)s, %(callee)s, %(status)s,
+                                 %(started_at)s, %(answered_at)s, %(ended_at)s, %(duration_secs)s,
+                                 %(trunk_name)s, %(channel_id)s)
+                            ON CONFLICT (channel_id) DO NOTHING
+                        """, rec)
+                conn.commit()
+            log.info("CDR: inserted %d call log(s)", len(rows_to_insert))
+        except Exception as e:
+            log.error("CDR insert failed: %s", e)
+            return  # don't advance offset on failure
+
+    _write_offset(new_offset)
+
+
 # ─── Main loop ──────────────────────────────────────────────
 def write_if_changed(path: Path, content: str) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -716,6 +905,13 @@ def tick() -> None:
     if changed:
         log.info("config changed → reloading asterisk")
         reload_asterisk()
+
+    # Process CDR (call detail records) → push to Supabase
+    try:
+        tenant_map = _fetch_tenant_map()
+        process_cdr(tenant_map)
+    except Exception as e:
+        log.error("CDR processing failed: %s", e)
 
 
 def main() -> None:
