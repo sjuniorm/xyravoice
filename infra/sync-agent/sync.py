@@ -737,38 +737,67 @@ def _detect_direction(dcontext: str) -> str:
     return "internal"
 
 
-def _extract_tenant_slug(src: str, dst: str, channel: str) -> str | None:
-    """Try to extract the tenant slug from caller/callee/channel."""
-    for val in (src, dst, channel):
+def _extract_tenant_slug(*fields: str) -> str | None:
+    """Try to extract the tenant slug (t_<8hex>) from any of the given fields."""
+    for val in fields:
         m = _TENANT_RE.search(val)
         if m:
             return m.group(1)
     return None
 
 
-def _resolve_tenant_id(slug: str | None, tenant_map: dict[str, str]) -> str | None:
-    """Map tenant slug → tenant UUID using a pre-fetched lookup."""
-    if not slug:
-        return None
-    return tenant_map.get(slug)
+_TRUNK_RE = re.compile(r"trunk_([0-9a-f]{16})")
 
 
-def _fetch_tenant_map() -> dict[str, str]:
-    """Return {tenant_slug: tenant_id} for all tenants."""
+def _extract_trunk_slug(*fields: str) -> str | None:
+    """Try to extract a trunk slug (trunk_<16hex>) from any field."""
+    for val in fields:
+        m = _TRUNK_RE.search(val)
+        if m:
+            return f"trunk_{m.group(1)}"
+    return None
+
+
+def _resolve_tenant_id(
+    tenant_slug: str | None,
+    trunk_slug: str | None,
+    tenant_map: dict[str, str],
+    trunk_to_tenant: dict[str, str],
+) -> str | None:
+    """Map tenant slug or trunk slug → tenant UUID."""
+    if tenant_slug and tenant_slug in tenant_map:
+        return tenant_map[tenant_slug]
+    if trunk_slug and trunk_slug in trunk_to_tenant:
+        return trunk_to_tenant[trunk_slug]
+    return None
+
+
+def _fetch_tenant_map() -> tuple[dict[str, str], dict[str, str]]:
+    """
+    Return:
+      tenant_map:     {tenant_slug: tenant_id}
+      trunk_to_tenant: {trunk_slug: tenant_id}
+    """
     if not DB_URL:
-        return {}
-    result: dict[str, str] = {}
+        return {}, {}
+    tenant_map: dict[str, str] = {}
+    trunk_to_tenant: dict[str, str] = {}
     with psycopg2.connect(DB_URL) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM public.tenants")
             for (tid,) in cur.fetchall():
                 tid_str = str(tid)
                 slug = f"t_{tid_str.replace('-', '')[:8]}"
-                result[slug] = tid_str
-    return result
+                tenant_map[slug] = tid_str
+
+            cur.execute("SELECT id, tenant_id FROM public.trunks WHERE enabled = true")
+            for (trunk_id, tenant_id) in cur.fetchall():
+                trunk_slug = f"trunk_{str(trunk_id).replace('-', '')[:16]}"
+                trunk_to_tenant[trunk_slug] = str(tenant_id)
+    return tenant_map, trunk_to_tenant
 
 
-def process_cdr(tenant_map: dict[str, str]) -> None:
+def process_cdr(tenant_map: dict[str, str], trunk_to_tenant: dict[str, str]) -> None:
     """Read new CDR lines from Master.csv and insert into call_logs."""
     if not CDR_CSV.exists():
         return
@@ -803,8 +832,12 @@ def process_cdr(tenant_map: dict[str, str]) -> None:
 
         direction = _detect_direction(dcontext)
         status = _disposition_to_status(disposition)
-        tenant_slug = _extract_tenant_slug(src, dst, channel)
-        tenant_id = _resolve_tenant_id(tenant_slug, tenant_map)
+        # Search all available fields for the tenant slug (t_<8hex>_...)
+        # The lastdata field often contains the Dial target with the
+        # full SIP username, e.g. PJSIP/t_ce2836fe_101@kamailio-out
+        tenant_slug = _extract_tenant_slug(src, dst, channel, dstchannel, lastdata)
+        trunk_slug = _extract_trunk_slug(channel, dstchannel, lastdata)
+        tenant_id = _resolve_tenant_id(tenant_slug, trunk_slug, tenant_map, trunk_to_tenant)
 
         if not tenant_id:
             log.warning("CDR: could not resolve tenant for %s (src=%s dst=%s)", uniqueid, src, dst)
@@ -908,8 +941,8 @@ def tick() -> None:
 
     # Process CDR (call detail records) → push to Supabase
     try:
-        tenant_map = _fetch_tenant_map()
-        process_cdr(tenant_map)
+        tenant_map, trunk_to_tenant = _fetch_tenant_map()
+        process_cdr(tenant_map, trunk_to_tenant)
     except Exception as e:
         log.error("CDR processing failed: %s", e)
 
