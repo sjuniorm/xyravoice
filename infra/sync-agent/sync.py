@@ -921,7 +921,7 @@ def process_cdr(tenant_map: dict[str, str], trunk_to_tenant: dict[str, str]) -> 
                                 (%(tenant_id)s, %(direction)s, %(caller)s, %(callee)s, %(status)s,
                                  %(started_at)s, %(answered_at)s, %(ended_at)s, %(duration_secs)s,
                                  %(trunk_name)s, %(channel_id)s)
-                            ON CONFLICT (channel_id) DO NOTHING
+                            ON CONFLICT (channel_id) WHERE channel_id IS NOT NULL DO NOTHING
                         """, rec)
                 conn.commit()
             log.info("CDR: inserted %d call log(s)", len(rows_to_insert))
